@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Manueller Firewall-Check als normaler User: `firewall-check`
-# Optional mit Domain: `firewall-check docs.roblox.com` prüft eine einzelne URL.
+# Manual firewall check as a regular user: `firewall-check`
+# Optionally with a domain: `firewall-check docs.roblox.com` checks a single URL.
 set -uo pipefail
 
 ok()   { printf '  ✅ %s\n' "$*"; }
@@ -11,25 +11,25 @@ probe() { curl -sS -o /dev/null --max-time 6 "$@" >/dev/null 2>&1; }
 
 if [[ $# -gt 0 ]]; then
   url="$1"; [[ "$url" == http* ]] || url="https://$url"
-  if probe "$url"; then echo "🟢 erreichbar: $url"; else echo "🔴 blockiert: $url"; fi
+  if probe "$url"; then echo "🟢 reachable: $url"; else echo "🔴 blocked: $url"; fi
   exit 0
 fi
 
-echo "🛡️  Firewall-Status"
-if [[ -f /run/firewall/ready ]]; then ok "aktiv seit $(cat /run/firewall/ready)"; else bad "nicht bereit (siehe /run/firewall/init.log)"; fi
+echo "🛡️  Firewall status"
+if [[ -f /run/firewall/ready ]]; then ok "active since $(cat /run/firewall/ready)"; else bad "not ready (see /run/firewall/init.log)"; fi
 
-echo "🟢 Muss erreichbar sein:"
+echo "🟢 Must be reachable:"
 for u in https://api.anthropic.com https://claude.ai https://github.com https://api.github.com; do
   if probe "$u"; then ok "$u"; else bad "$u"; fi
 done
 
-echo "🔴 Muss blockiert sein:"
+echo "🔴 Must be blocked:"
 for u in https://example.com https://www.google.com http://host.docker.internal http://192.168.65.254 http://172.17.0.1; do
-  if probe "$u"; then bad "$u ist erreichbar!"; else ok "$u"; fi
+  if probe "$u"; then bad "$u is reachable!"; else ok "$u"; fi
 done
-if dig +time=2 +tries=1 @1.1.1.1 example.com >/dev/null 2>&1; then bad "Direkter DNS (1.1.1.1) möglich!"; else ok "Direkter DNS an fremde Resolver"; fi
+if dig +time=2 +tries=1 @1.1.1.1 example.com >/dev/null 2>&1; then bad "Direct DNS (1.1.1.1) possible!"; else ok "Direct DNS to foreign resolvers"; fi
 
-echo "📜 Letzte DNS-Anfragen (zum Finden fehlender Allowlist-Einträge):"
+echo "📜 Recent DNS queries (to find missing allowlist entries):"
 grep -F 'query[' /run/firewall/dnsmasq.log 2>/dev/null | tail -n 15 | sed 's/^/  /' || true
 
 exit "${fail}"

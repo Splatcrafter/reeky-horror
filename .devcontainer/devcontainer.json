@@ -1,5 +1,5 @@
-// Dev-Container: reeky-horror (Roblox · Rojo · Luau · Claude Code)
-// Details und Sicherheitskonzept: .devcontainer/README.md
+// Dev container: reeky-horror (Roblox · Rojo · Luau · Claude Code)
+// Details and security model: .devcontainer/README.md
 {
   "name": "reeky-horror 👻 (Roblox · Rojo · Claude Code)",
 
@@ -13,74 +13,74 @@
     }
   },
 
-  // Image-ENTRYPOINT (Firewall-Setup als root) + CMD (sleep infinity) behalten.
+  // Keep the image ENTRYPOINT (firewall setup as root) + CMD (sleep infinity).
   "overrideCommand": false,
-  // tini als PID 1 (Zombie-Reaping, sauberes Signal-Handling)
+  // tini as PID 1 (zombie reaping, clean signal handling)
   "init": true,
 
-  // Container-Prozess = root (nur für die Firewall), gearbeitet wird als "dev".
+  // Container process = root (firewall only); all work happens as "dev".
   "containerUser": "root",
   "remoteUser": "dev",
 
   // ---------------------------------------------------------------------------
-  //  Minimale Rechte
+  //  Least privilege
   // ---------------------------------------------------------------------------
   "runArgs": [
-    // Alle Capabilities weg, nur das Nötigste zurück:
+    // Drop all capabilities, add back only what's needed:
     "--cap-drop=ALL",
-    "--cap-add=NET_ADMIN",        // iptables/ipset (Firewall) + dnsmasq-ipset
-    "--cap-add=NET_RAW",          // iptables-Erweiterungen
-    "--cap-add=NET_BIND_SERVICE", // dnsmasq auf Port 53
-    "--cap-add=SETUID",           // dnsmasq droppt auf User "dnsfw"
+    "--cap-add=NET_ADMIN",        // iptables/ipset (firewall) + dnsmasq ipset
+    "--cap-add=NET_RAW",          // iptables extensions
+    "--cap-add=NET_BIND_SERVICE", // dnsmasq on port 53
+    "--cap-add=SETUID",           // dnsmasq drops to user "dnsfw"
     "--cap-add=SETGID",
-    "--cap-add=CHOWN",            // Dateirechte im Entrypoint / Volume-Init
+    "--cap-add=CHOWN",            // file permissions in entrypoint / volume init
     "--cap-add=DAC_OVERRIDE",
     "--cap-add=FOWNER",
-    "--cap-add=KILL",             // Neustart von dnsmasq bei Firewall-Reinit
-    // Kein Weg zurück zu root (setuid/file-caps wirkungslos; im Image gibt es kein sudo)
+    "--cap-add=KILL",             // restarting dnsmasq on firewall re-init
+    // No way back to root (setuid/file caps have no effect; the image has no sudo)
     "--security-opt=no-new-privileges:true",
-    // IPv6 aus – die Firewall kümmert sich nur um IPv4
+    // IPv6 off – the firewall only handles IPv4
     "--sysctl=net.ipv6.conf.all.disable_ipv6=1",
     "--sysctl=net.ipv6.conf.default.disable_ipv6=1",
-    // Ports < 1024 nur mit Capability (dev kann z. B. keinen Fake-DNS auf :53 binden)
+    // Ports < 1024 require a capability (dev can't bind e.g. a fake DNS on :53)
     "--sysctl=net.ipv4.ip_unprivileged_port_start=1024",
     "--pids-limit=4096"
   ],
 
   // ---------------------------------------------------------------------------
-  //  Dateisystem: NUR der Projektordner + zwei benannte Volumes
-  //  (kein Docker-Socket, kein ~/.ssh, keine Host-Credentials)
+  //  File system: ONLY the project folder + two named volumes
+  //  (no Docker socket, no ~/.ssh, no host credentials)
   // ---------------------------------------------------------------------------
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
   "workspaceFolder": "/workspace",
   "mounts": [
-    // Container-Konfiguration ist im Container READ-ONLY -> Claude kann sich
-    // nicht selbst Rechte/Ports/Mounts für den nächsten Rebuild eintragen.
+    // Container config is READ-ONLY inside the container -> Claude can't grant
+    // itself extra privileges/ports/mounts for the next rebuild.
     "source=${localWorkspaceFolder}/.devcontainer,target=/workspace/.devcontainer,type=bind,readonly",
-    // Claude-Login, Settings & Sessions überleben Rebuilds (pro Projekt isoliert)
+    // Claude login, settings & sessions survive rebuilds (isolated per project)
     "source=reeky-horror-claude-${devcontainerId},target=/home/dev/.claude,type=volume",
-    // Bash-History
+    // Bash history
     "source=reeky-horror-history-${devcontainerId},target=/commandhistory,type=volume"
   ],
 
   "containerEnv": {
     "CLAUDE_CONFIG_DIR": "/home/dev/.claude",
-    // Optionale Telemetrie aus -> Datadog-Hosts müssen nicht freigegeben werden
+    // Optional telemetry off -> Datadog hosts don't need to be allowed
     "DISABLE_TELEMETRY": "1",
     "DISABLE_ERROR_REPORTING": "1",
-    // claude.ai-MCP-Connectors aus -> mcp-proxy.anthropic.com bleibt zu
+    // claude.ai MCP connectors off -> mcp-proxy.anthropic.com stays closed
     "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
     "TZ": "Europe/Berlin"
   },
   "remoteEnv": {
-    // Kein Durchreichen des SSH-Agents vom Host
+    // Don't forward the host's SSH agent
     "SSH_AUTH_SOCK": ""
   },
 
   // ---------------------------------------------------------------------------
-  //  Ports: ausschließlich Rojo
-  //  VS Code tunnelt den Port über seine eigene Verbindung (kein `docker -p`),
-  //  auf dem Host landet er auf localhost:34872 -> Roblox-Studio-Rojo-Plugin.
+  //  Ports: Rojo only
+  //  VS Code tunnels the port over its own connection (no `docker -p`);
+  //  on the host it lands on localhost:34872 -> Roblox Studio Rojo plugin.
   // ---------------------------------------------------------------------------
   "forwardPorts": [34872],
   "portsAttributes": {
@@ -90,7 +90,7 @@
       "requireLocalPort": true
     }
   },
-  // Alle anderen Ports werden NICHT automatisch weitergeleitet
+  // All other ports are NOT forwarded automatically
   "otherPortsAttributes": {
     "onAutoForward": "ignore"
   },

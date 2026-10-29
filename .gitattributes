@@ -1,4 +1,4 @@
-# Shell-Skripte müssen im Linux-Container LF haben (Windows-Host!)
+# Shell scripts must use LF inside the Linux container (Windows host!)
 * text=auto
 *.sh text eol=lf
 .devcontainer/** text eol=lf

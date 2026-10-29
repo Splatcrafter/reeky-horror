@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  init-firewall.sh – Egress-Firewall für den Dev-Container
+#  init-firewall.sh – egress firewall for the dev container
 # =============================================================================
-#  Läuft als root aus dem Container-Entrypoint (nie als User "dev").
+#  Runs as root from the container entrypoint (never as user "dev").
 #
-#  Aufbau:
-#    1. Fail-closed: alle Policies sofort auf DROP.
-#    2. Lokaler DNS-Resolver (dnsmasq, User "dnsfw") auf 127.0.0.1:53.
-#       - Löst NUR Domains aus /etc/firewall/allowed-domains.conf auf.
-#       - Schreibt jede aufgelöste IPv4 live in ein ipset
-#         -> überlebt IP-Rotationen von Cloudflare/CDNs ohne Cronjob.
-#       - Nur dnsmasq darf den Upstream-DNS (Docker) erreichen.
-#    3. Host, LAN, Docker-Netze, Link-Local/Metadata: hart REJECT.
-#    4. Ausgehend nur TCP/443 (und TCP/22 für "ssh"-Domains) zu IPs im ipset.
-#    5. Eingehend nur Loopback + Antworten auf eigene Verbindungen.
-#       (Rojo-Port-Forwarding von VS Code läuft über Loopback im Container.)
-#    6. IPv6 komplett zu.
-#    7. Selbsttest; schlägt der fehl -> totaler Lockdown.
+#  Overview:
+#    1. Fail-closed: all policies set to DROP immediately.
+#    2. Local DNS resolver (dnsmasq, user "dnsfw") on 127.0.0.1:53.
+#       - Resolves ONLY domains from /etc/firewall/allowed-domains.conf.
+#       - Adds every resolved IPv4 address to an ipset on the fly
+#         -> survives Cloudflare/CDN IP rotation without a cron job.
+#       - Only dnsmasq may reach the upstream DNS (Docker).
+#    3. Host, LAN, Docker networks, link-local/metadata: hard REJECT.
+#    4. Outbound only TCP/443 (and TCP/22 for "ssh" domains) to IPs in the ipset.
+#    5. Inbound only loopback + replies to our own connections.
+#       (VS Code's Rojo port forwarding goes through loopback inside the container.)
+#    6. IPv6 fully closed.
+#    7. Self-test; on failure -> full lockdown.
 # =============================================================================
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -31,8 +31,8 @@ readonly DNSMASQ_LOG="${STATE_DIR}/dnsmasq.log"
 readonly DNSMASQ_PID="${STATE_DIR}/dnsmasq.pid"
 readonly UPSTREAM_FILE="${STATE_DIR}/upstream-dns"
 
-# Ziele, die NIE erreichbar sein dürfen (Host, LAN, Docker-Bridge,
-# Docker-Desktop-VM 192.168.65.0/24, host.docker.internal, Cloud-Metadata …)
+# Destinations that must NEVER be reachable (host, LAN, Docker bridge,
+# Docker Desktop VM 192.168.65.0/24, host.docker.internal, cloud metadata, ...)
 readonly BLOCKED_NETS=(
   0.0.0.0/8
   10.0.0.0/8
@@ -56,7 +56,7 @@ IP6T=(ip6tables -w 5)
 log() { printf '[firewall] %s\n' "$*"; }
 
 lockdown() {
-  # Alles zu, nur Loopback bleibt (damit der Container nicht hängt).
+  # Close everything, keep only loopback (so the container doesn't hang).
   "${IPT[@]}" -P INPUT DROP   || true
   "${IPT[@]}" -P FORWARD DROP || true
   "${IPT[@]}" -P OUTPUT DROP  || true
@@ -66,17 +66,17 @@ lockdown() {
 }
 
 die() {
-  log "❌ FEHLER: $*"
-  log "🔒 Aktiviere vollständigen Lockdown (kein ausgehender Traffic)."
+  log "❌ ERROR: $*"
+  log "🔒 Enabling full lockdown (no outbound traffic)."
   lockdown
   rm -f "${STATE_DIR}/ready"
   date -Is > "${STATE_DIR}/failed"
   exit 1
 }
 
-trap 'die "Unerwarteter Fehler in Zeile ${LINENO}: ${BASH_COMMAND}"' ERR
+trap 'die "Unexpected error on line ${LINENO}: ${BASH_COMMAND}"' ERR
 
-[[ "$(id -u)" -eq 0 ]] || { echo "init-firewall.sh muss als root laufen" >&2; exit 1; }
+[[ "$(id -u)" -eq 0 ]] || { echo "init-firewall.sh must run as root" >&2; exit 1; }
 
 mkdir -p "${STATE_DIR}"
 chmod 0755 "${STATE_DIR}"
@@ -85,12 +85,12 @@ rm -f "${STATE_DIR}/ready" "${STATE_DIR}/failed"
 # -----------------------------------------------------------------------------
 # 1. Fail-closed
 # -----------------------------------------------------------------------------
-log "🔒 Setze Default-Policies auf DROP …"
+log "🔒 Setting default policies to DROP ..."
 "${IPT[@]}" -P INPUT DROP
 "${IPT[@]}" -P FORWARD DROP
 "${IPT[@]}" -P OUTPUT DROP
-# Nur die filter-Tabelle leeren. Die nat-Tabelle bleibt unangetastet,
-# weil Docker dort seinen eingebetteten DNS (127.0.0.11) umleitet.
+# Flush only the filter table. The nat table is left untouched because
+# Docker uses it to redirect its embedded DNS (127.0.0.11).
 "${IPT[@]}" -F
 "${IPT[@]}" -X
 
@@ -102,13 +102,13 @@ if "${IP6T[@]}" -L >/dev/null 2>&1; then
   "${IP6T[@]}" -X
   "${IP6T[@]}" -A INPUT  -i lo -j ACCEPT
   "${IP6T[@]}" -A OUTPUT -o lo -j ACCEPT
-  log "🚫 IPv6: alles außer Loopback blockiert."
+  log "🚫 IPv6: everything except loopback blocked."
 else
-  log "ℹ️  IPv6 ist im Container deaktiviert/nicht verfügbar."
+  log "ℹ️  IPv6 is disabled/unavailable in the container."
 fi
 
 # -----------------------------------------------------------------------------
-# 2. Upstream-DNS ermitteln (der von Docker vorgegebene Resolver)
+# 2. Determine upstream DNS (the resolver provided by Docker)
 # -----------------------------------------------------------------------------
 mapfile -t UPSTREAMS < <(
   awk '$1 == "nameserver" { print $2 }' /etc/resolv.conf \
@@ -116,18 +116,18 @@ mapfile -t UPSTREAMS < <(
     | grep -vx '127.0.0.1' || true
 )
 if [[ ${#UPSTREAMS[@]} -eq 0 && -s "${UPSTREAM_FILE}" ]]; then
-  # Neustart: resolv.conf zeigt schon auf uns -> gespeicherten Upstream nehmen.
+  # Restart: resolv.conf already points to us -> use the saved upstream.
   mapfile -t UPSTREAMS < "${UPSTREAM_FILE}"
 fi
-[[ ${#UPSTREAMS[@]} -gt 0 ]] || die "Kein IPv4-Upstream-DNS in /etc/resolv.conf gefunden."
+[[ ${#UPSTREAMS[@]} -gt 0 ]] || die "No IPv4 upstream DNS found in /etc/resolv.conf."
 printf '%s\n' "${UPSTREAMS[@]}" > "${UPSTREAM_FILE}"
 [[ -e "${STATE_DIR}/resolv.conf.orig" ]] || cp /etc/resolv.conf "${STATE_DIR}/resolv.conf.orig"
-log "🌐 Upstream-DNS: ${UPSTREAMS[*]}"
+log "🌐 Upstream DNS: ${UPSTREAMS[*]}"
 
 # -----------------------------------------------------------------------------
-# 3. Allowlist einlesen
+# 3. Read the allowlist
 # -----------------------------------------------------------------------------
-[[ -r "${ALLOWLIST}" ]] || die "Allowlist ${ALLOWLIST} fehlt."
+[[ -r "${ALLOWLIST}" ]] || die "Allowlist ${ALLOWLIST} is missing."
 DOMAINS=()
 SSH_DOMAINS=()
 while IFS=$' \t' read -r domain flag _rest || [[ -n "${domain:-}" ]]; do
@@ -136,15 +136,15 @@ while IFS=$' \t' read -r domain flag _rest || [[ -n "${domain:-}" ]]; do
   domain="${domain,,}"
   domain="${domain%.}"
   if [[ ! "${domain}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]]; then
-    die "Ungültige Domain in Allowlist: '${domain}'"
+    die "Invalid domain in allowlist: '${domain}'"
   fi
   DOMAINS+=("${domain}")
   if [[ "${flag:-}" == "ssh" ]]; then
     SSH_DOMAINS+=("${domain}")
   fi
 done < "${ALLOWLIST}"
-[[ ${#DOMAINS[@]} -gt 0 ]] || die "Allowlist ist leer."
-log "📋 ${#DOMAINS[@]} erlaubte Domains (davon ${#SSH_DOMAINS[@]} mit SSH)."
+[[ ${#DOMAINS[@]} -gt 0 ]] || die "Allowlist is empty."
+log "📋 ${#DOMAINS[@]} allowed domains (${#SSH_DOMAINS[@]} with SSH)."
 
 is_ssh_domain() {
   local d
@@ -153,7 +153,7 @@ is_ssh_domain() {
 }
 
 # -----------------------------------------------------------------------------
-# 4. ipsets (werden von dnsmasq dynamisch befüllt)
+# 4. ipsets (populated dynamically by dnsmasq)
 # -----------------------------------------------------------------------------
 for set in "${SET_HTTPS}" "${SET_SSH}"; do
   ipset create "${set}" hash:ip family inet maxelem 65536 -exist
@@ -161,7 +161,7 @@ for set in "${SET_HTTPS}" "${SET_SSH}"; do
 done
 
 # -----------------------------------------------------------------------------
-# 5. dnsmasq konfigurieren und starten
+# 5. Configure dnsmasq
 # -----------------------------------------------------------------------------
 if [[ -s "${DNSMASQ_PID}" ]] && kill -0 "$(cat "${DNSMASQ_PID}")" 2>/dev/null; then
   kill "$(cat "${DNSMASQ_PID}")" || true
@@ -170,24 +170,24 @@ fi
 pkill -x dnsmasq 2>/dev/null || true
 
 {
-  echo "# automatisch generiert von init-firewall.sh – nicht bearbeiten"
+  echo "# generated by init-firewall.sh – do not edit"
   echo "user=${DNS_USER}"
   echo "group=${DNS_USER}"
   echo "listen-address=127.0.0.1"
   echo "bind-interfaces"
   echo "port=53"
   echo "pid-file=${DNSMASQ_PID}"
-  # Kein Default-Upstream: nicht gelistete Domains -> REFUSED (auch gegen DNS-Exfiltration)
+  # No default upstream: unlisted domains -> REFUSED (also prevents DNS exfiltration)
   echo "no-resolv"
   echo "no-hosts"
   echo "no-poll"
-  # Kein Cache: jede Auflösung geht upstream und aktualisiert das ipset
+  # No cache: every lookup goes upstream and refreshes the ipset
   echo "cache-size=0"
-  # IPv6 ist zu -> keine AAAA-Antworten ausliefern
+  # IPv6 is closed -> don't hand out AAAA answers
   echo "filter-AAAA"
   echo "domain-needed"
   echo "bogus-priv"
-  # Antworten mit privaten IPs verwerfen (DNS-Rebinding Richtung Host/LAN)
+  # Drop answers containing private IPs (DNS rebinding towards host/LAN)
   echo "stop-dns-rebind"
   echo "log-queries"
   echo "log-facility=${DNSMASQ_LOG}"
@@ -209,11 +209,11 @@ chown "${DNS_USER}:${DNS_USER}" "${DNSMASQ_LOG}"
 chmod 0644 "${DNSMASQ_LOG}"
 
 # -----------------------------------------------------------------------------
-# 6. iptables-Regeln
+# 6. iptables rules
 # -----------------------------------------------------------------------------
-log "🧱 Schreibe iptables-Regeln …"
+log "🧱 Writing iptables rules ..."
 
-# --- INPUT: nur Loopback + Antworten -----------------------------------------
+# --- INPUT: loopback + replies only ------------------------------------------
 "${IPT[@]}" -A INPUT -i lo -j ACCEPT
 "${IPT[@]}" -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 "${IPT[@]}" -A INPUT -m conntrack --ctstate INVALID -j DROP
@@ -222,20 +222,21 @@ log "🧱 Schreibe iptables-Regeln …"
 "${IPT[@]}" -A OUTPUT -m conntrack --ctstate INVALID -j DROP
 "${IPT[@]}" -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-# Upstream-DNS dürfen nur dnsmasq (dnsfw) und root (dnsmasq vor dem Rechte-Drop).
-# Der Arbeits-User "dev" kann nie root werden (kein sudo, no-new-privileges).
+# Only dnsmasq (dnsfw) and root (dnsmasq before dropping privileges) may reach
+# the upstream DNS. The working user "dev" can never become root
+# (no sudo, no-new-privileges).
 DNS_OWNERS=("${DNS_USER}" 0)
 
-# Dockers eingebetteter DNS (127.0.0.11, liegt auf Loopback!) nur für dnsmasq
+# Docker's embedded DNS (127.0.0.11, lives on loopback!) for dnsmasq only
 for owner in "${DNS_OWNERS[@]}"; do
   "${IPT[@]}" -A OUTPUT -d 127.0.0.11/32 -m owner --uid-owner "${owner}" -j ACCEPT
 done
 "${IPT[@]}" -A OUTPUT -d 127.0.0.11/32 -j REJECT --reject-with icmp-admin-prohibited
 
-# Loopback (dnsmasq auf 127.0.0.1:53, Rojo auf 127.0.0.1:34872, VS-Code-Server)
+# Loopback (dnsmasq on 127.0.0.1:53, Rojo on 127.0.0.1:34872, VS Code server)
 "${IPT[@]}" -A OUTPUT -o lo -j ACCEPT
 
-# Upstream-DNS: ausschließlich dnsmasq
+# Upstream DNS: dnsmasq only
 for ns in "${UPSTREAMS[@]}"; do
   for proto in udp tcp; do
     for owner in "${DNS_OWNERS[@]}"; do
@@ -244,27 +245,27 @@ for ns in "${UPSTREAMS[@]}"; do
     done
   done
 done
-# dnsmasq selbst darf sonst nirgendwo hin
+# dnsmasq itself may not go anywhere else
 "${IPT[@]}" -A OUTPUT -m owner --uid-owner "${DNS_USER}" -j REJECT --reject-with icmp-admin-prohibited
 
-# Host / LAN / Docker / Metadata hart blocken (auch wenn eine IP im ipset landen sollte)
+# Hard-block host / LAN / Docker / metadata (even if such an IP ends up in the ipset)
 for net in "${BLOCKED_NETS[@]}"; do
   "${IPT[@]}" -A OUTPUT -d "${net}" -p tcp -j REJECT --reject-with tcp-reset
   "${IPT[@]}" -A OUTPUT -d "${net}" -j REJECT --reject-with icmp-admin-prohibited
 done
 
-# Erlaubte Ziele (dynamisch über dnsmasq -> ipset)
+# Allowed destinations (dynamic via dnsmasq -> ipset)
 "${IPT[@]}" -A OUTPUT -p tcp --dport 443 -m set --match-set "${SET_HTTPS}" dst -j ACCEPT
 "${IPT[@]}" -A OUTPUT -p tcp --dport 22  -m set --match-set "${SET_SSH}"   dst -j ACCEPT
 
-# Rest: schnell und eindeutig ablehnen
+# Everything else: reject fast and explicitly
 "${IPT[@]}" -A OUTPUT -p tcp -j REJECT --reject-with tcp-reset
 "${IPT[@]}" -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
 
 # -----------------------------------------------------------------------------
-# 7. dnsmasq starten und Container-DNS umstellen
+# 7. Start dnsmasq and switch the container's DNS over to it
 # -----------------------------------------------------------------------------
-log "🧭 Starte dnsmasq (User ${DNS_USER}) …"
+log "🧭 Starting dnsmasq (user ${DNS_USER}) ..."
 dnsmasq --conf-file="${DNSMASQ_CONF}"
 
 for _ in $(seq 1 20); do
@@ -272,50 +273,50 @@ for _ in $(seq 1 20); do
   sleep 0.5
 done
 
-# /etc/resolv.conf ist von Docker bind-gemountet -> überschreiben statt ersetzen
+# /etc/resolv.conf is bind-mounted by Docker -> overwrite in place instead of replacing
 printf 'nameserver 127.0.0.1\noptions edns0 trust-ad\n' > /etc/resolv.conf
 
 # -----------------------------------------------------------------------------
-# 8. Selbsttest
+# 8. Self-test
 # -----------------------------------------------------------------------------
-log "🧪 Selbsttest …"
+log "🧪 Self-test ..."
 trap - ERR
 
 expect_blocked() {
   local desc="$1"; shift
   if curl -sS -o /dev/null --max-time 5 "$@" >/dev/null 2>&1; then
-    die "Selbsttest: ${desc} ist erreichbar, sollte aber blockiert sein!"
+    die "Self-test: ${desc} is reachable but should be blocked!"
   fi
-  log "   ✅ blockiert: ${desc}"
+  log "   ✅ blocked: ${desc}"
 }
 
-# Nicht gelistete Domain (DNS REFUSED)
+# Unlisted domain (DNS REFUSED)
 expect_blocked "https://example.com" https://example.com
-# Direkte IP ohne DNS (Cloudflare-Resolver)
-expect_blocked "https://1.1.1.1 (direkte IP)" --insecure https://1.1.1.1
-# Docker-Gateway / Host
+# Direct IP without DNS (Cloudflare resolver)
+expect_blocked "https://1.1.1.1 (direct IP)" --insecure https://1.1.1.1
+# Docker gateway / host
 GATEWAY="$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}')"
 if [[ -n "${GATEWAY}" ]]; then
-  expect_blocked "Gateway/Host ${GATEWAY}" "http://${GATEWAY}/"
+  expect_blocked "gateway/host ${GATEWAY}" "http://${GATEWAY}/"
 fi
 expect_blocked "host.docker.internal" http://host.docker.internal/
-# DNS an dnsmasq vorbei
+# DNS bypassing dnsmasq
 if dig +time=2 +tries=1 @1.1.1.1 example.com A >/dev/null 2>&1; then
-  die "Selbsttest: direkter DNS an 1.1.1.1 funktioniert, sollte blockiert sein!"
+  die "Self-test: direct DNS to 1.1.1.1 works but should be blocked!"
 fi
-log "   ✅ blockiert: direkter DNS an fremde Resolver"
+log "   ✅ blocked: direct DNS to foreign resolvers"
 if dig +time=2 +tries=1 +short @127.0.0.1 example.com A 2>/dev/null | grep -q .; then
-  die "Selbsttest: dnsmasq löst nicht gelistete Domain auf!"
+  die "Self-test: dnsmasq resolves an unlisted domain!"
 fi
-log "   ✅ blockiert: DNS für nicht gelistete Domains"
+log "   ✅ blocked: DNS for unlisted domains"
 
-# Positivtest – Netzwerkprobleme sind kein Sicherheitsfehler, nur Warnung
+# Positive test – network problems are not a security failure, just a warning
 if curl -sS -o /dev/null --max-time 10 https://api.anthropic.com >/dev/null 2>&1; then
-  log "   ✅ erreichbar: https://api.anthropic.com"
+  log "   ✅ reachable: https://api.anthropic.com"
 else
-  log "   ⚠️  https://api.anthropic.com nicht erreichbar (offline? DNS?). Firewall bleibt aktiv."
+  log "   ⚠️  https://api.anthropic.com unreachable (offline? DNS?). Firewall stays active."
 fi
 
 date -Is > "${STATE_DIR}/ready"
 chmod 0644 "${STATE_DIR}/ready"
-log "🛡️  Firewall aktiv. Erlaubte IPs werden live per DNS nachgetragen."
+log "🛡️  Firewall active. Allowed IPs are added live via DNS."

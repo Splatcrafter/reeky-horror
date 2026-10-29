@@ -1,5 +1,5 @@
-# Roblox/Luau-Toolchain – wird im Dev-Container per `rokit install` installiert.
-# Neue Tools: `rokit add <owner/repo>` · Updates: `rokit update`
+# Roblox/Luau toolchain – installed in the dev container via `rokit install`.
+# Add tools: `rokit add <owner/repo>` · Update: `rokit update`
 [tools]
 rojo = "rojo-rbx/rojo@7.7.1"
 stylua = "JohnnyMorganz/StyLua@2.6.0"

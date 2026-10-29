@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Container-Entrypoint (läuft als root, PID 1 ist tini via "init": true).
-# Setzt die Firewall auf und übergibt dann an CMD (sleep infinity).
-# Schlägt die Firewall fehl, bleibt der Container im Lockdown (kein Netz),
-# damit man das Log lesen kann – er wird NICHT ungeschützt gestartet.
+# Container entrypoint (runs as root; PID 1 is tini via "init": true).
+# Sets up the firewall, then hands over to CMD (sleep infinity).
+# If the firewall fails, the container stays in lockdown (no network) so the
+# log can be inspected – it is NEVER started unprotected.
 set -uo pipefail
 
 mkdir -p /run/firewall
@@ -13,7 +13,7 @@ status=${PIPESTATUS[0]}
 chmod 0644 /run/firewall/init.log
 
 if [[ ${status} -ne 0 ]]; then
-  echo "[entrypoint] ❌ Firewall-Setup fehlgeschlagen (Exit ${status}). Container läuft im Lockdown." >&2
+  echo "[entrypoint] ❌ Firewall setup failed (exit ${status}). Container is in lockdown." >&2
 fi
 
 exec "$@"
