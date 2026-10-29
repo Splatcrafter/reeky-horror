@@ -1,0 +1,134 @@
+// Dev-Container: reeky-horror (Roblox · Rojo · Luau · Claude Code)
+// Details und Sicherheitskonzept: .devcontainer/README.md
+{
+  "name": "reeky-horror 👻 (Roblox · Rojo · Claude Code)",
+
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".",
+    "args": {
+      "TZ": "Europe/Berlin",
+      "CLAUDE_CODE_VERSION": "latest",
+      "ROKIT_VERSION": "1.2.0"
+    }
+  },
+
+  // Image-ENTRYPOINT (Firewall-Setup als root) + CMD (sleep infinity) behalten.
+  "overrideCommand": false,
+  // tini als PID 1 (Zombie-Reaping, sauberes Signal-Handling)
+  "init": true,
+
+  // Container-Prozess = root (nur für die Firewall), gearbeitet wird als "dev".
+  "containerUser": "root",
+  "remoteUser": "dev",
+
+  // ---------------------------------------------------------------------------
+  //  Minimale Rechte
+  // ---------------------------------------------------------------------------
+  "runArgs": [
+    // Alle Capabilities weg, nur das Nötigste zurück:
+    "--cap-drop=ALL",
+    "--cap-add=NET_ADMIN",        // iptables/ipset (Firewall) + dnsmasq-ipset
+    "--cap-add=NET_RAW",          // iptables-Erweiterungen
+    "--cap-add=NET_BIND_SERVICE", // dnsmasq auf Port 53
+    "--cap-add=SETUID",           // dnsmasq droppt auf User "dnsfw"
+    "--cap-add=SETGID",
+    "--cap-add=CHOWN",            // Dateirechte im Entrypoint / Volume-Init
+    "--cap-add=DAC_OVERRIDE",
+    "--cap-add=FOWNER",
+    "--cap-add=KILL",             // Neustart von dnsmasq bei Firewall-Reinit
+    // Kein Weg zurück zu root (setuid/file-caps wirkungslos; im Image gibt es kein sudo)
+    "--security-opt=no-new-privileges:true",
+    // IPv6 aus – die Firewall kümmert sich nur um IPv4
+    "--sysctl=net.ipv6.conf.all.disable_ipv6=1",
+    "--sysctl=net.ipv6.conf.default.disable_ipv6=1",
+    // Ports < 1024 nur mit Capability (dev kann z. B. keinen Fake-DNS auf :53 binden)
+    "--sysctl=net.ipv4.ip_unprivileged_port_start=1024",
+    "--pids-limit=4096"
+  ],
+
+  // ---------------------------------------------------------------------------
+  //  Dateisystem: NUR der Projektordner + zwei benannte Volumes
+  //  (kein Docker-Socket, kein ~/.ssh, keine Host-Credentials)
+  // ---------------------------------------------------------------------------
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "workspaceFolder": "/workspace",
+  "mounts": [
+    // Container-Konfiguration ist im Container READ-ONLY -> Claude kann sich
+    // nicht selbst Rechte/Ports/Mounts für den nächsten Rebuild eintragen.
+    "source=${localWorkspaceFolder}/.devcontainer,target=/workspace/.devcontainer,type=bind,readonly",
+    // Claude-Login, Settings & Sessions überleben Rebuilds (pro Projekt isoliert)
+    "source=reeky-horror-claude-${devcontainerId},target=/home/dev/.claude,type=volume",
+    // Bash-History
+    "source=reeky-horror-history-${devcontainerId},target=/commandhistory,type=volume"
+  ],
+
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/dev/.claude",
+    // Optionale Telemetrie aus -> Datadog-Hosts müssen nicht freigegeben werden
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    // claude.ai-MCP-Connectors aus -> mcp-proxy.anthropic.com bleibt zu
+    "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+    "TZ": "Europe/Berlin"
+  },
+  "remoteEnv": {
+    // Kein Durchreichen des SSH-Agents vom Host
+    "SSH_AUTH_SOCK": ""
+  },
+
+  // ---------------------------------------------------------------------------
+  //  Ports: ausschließlich Rojo
+  //  VS Code tunnelt den Port über seine eigene Verbindung (kein `docker -p`),
+  //  auf dem Host landet er auf localhost:34872 -> Roblox-Studio-Rojo-Plugin.
+  // ---------------------------------------------------------------------------
+  "forwardPorts": [34872],
+  "portsAttributes": {
+    "34872": {
+      "label": "Rojo (Roblox Studio Sync)",
+      "onAutoForward": "silent",
+      "requireLocalPort": true
+    }
+  },
+  // Alle anderen Ports werden NICHT automatisch weitergeleitet
+  "otherPortsAttributes": {
+    "onAutoForward": "ignore"
+  },
+
+  // ---------------------------------------------------------------------------
+  //  Lifecycle
+  // ---------------------------------------------------------------------------
+  "postCreateCommand": "devcontainer-post-create",
+  "postStartCommand": "firewall-wait 90",
+  "waitFor": "postStartCommand",
+
+  // ---------------------------------------------------------------------------
+  //  VS Code
+  // ---------------------------------------------------------------------------
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "evaera.vscode-rojo",
+        "JohnnyMorganz.luau-lsp",
+        "JohnnyMorganz.stylua",
+        "Kampfkarren.selene-vscode"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "files.eol": "\n",
+        "luau-lsp.sourcemap.enabled": true,
+        "luau-lsp.sourcemap.autogenerate": true,
+        "luau-lsp.platform.type": "roblox",
+        "[luau]": {
+          "editor.defaultFormatter": "JohnnyMorganz.stylua",
+          "editor.formatOnSave": true
+        },
+        "[lua]": {
+          "editor.defaultFormatter": "JohnnyMorganz.stylua",
+          "editor.formatOnSave": true
+        }
+      }
+    }
+  }
+}

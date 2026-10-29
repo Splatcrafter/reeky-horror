@@ -1,0 +1,6 @@
+# Shell-Skripte müssen im Linux-Container LF haben (Windows-Host!)
+* text=auto
+*.sh text eol=lf
+.devcontainer/** text eol=lf
+*.luau text eol=lf
+*.lua text eol=lf
